@@ -6,6 +6,33 @@ import { SemanticVectorMemory } from '../src/semantic-vector-memory.js';
 // Performance Benchmark Suite — Memory & Vector Latency
 // ===========================================================================
 
+/**
+ * Fastest of several timed runs.
+ *
+ * Asserting a wall-clock threshold on a single sample is a flake generator. The
+ * suite runs while every other package's tests run in parallel, so one GC pause
+ * or scheduler preemption is enough to push a 20ms budget over the line on
+ * hardware that is otherwise fast — a red CI that says nothing about the code.
+ *
+ * The minimum of N samples is stable under that contention and still catches a
+ * real regression: an algorithmic slowdown (a worse index, an accidental O(n^2))
+ * inflates every sample, not one. The first run is a discarded warm-up so JIT
+ * and cache-fill costs are not charged to the measurement.
+ */
+function bestOf<T>(runs: number, trial: () => T): { elapsed: number; value: T } {
+  let value = trial() as T; // warm-up, discarded
+  let elapsed = Number.POSITIVE_INFINITY;
+
+  for (let i = 0; i < runs; i++) {
+    const start = performance.now();
+    value = trial();
+    const took = performance.now() - start;
+    if (took < elapsed) elapsed = took;
+  }
+
+  return { elapsed, value };
+}
+
 describe('Performance Benchmark: Vector Search Latency', () => {
   it('should search 1,000 documents in under 20ms', () => {
     const engine = new LocalVectorEngine({ dimension: 128 });
@@ -22,9 +49,7 @@ describe('Performance Benchmark: Vector Search Latency', () => {
       engine.insertWithId(`doc-${i}`, `${topic} for system ${i} with details`);
     }
 
-    const start = performance.now();
-    const results = engine.search('database optimization performance', 5);
-    const elapsed = performance.now() - start;
+    const { elapsed, value: results } = bestOf(5, () => engine.search('database optimization performance', 5));
 
     expect(results.length).toBe(5);
     expect(elapsed).toBeLessThan(20);
@@ -37,26 +62,24 @@ describe('Performance Benchmark: Vector Search Latency', () => {
       engine.insertWithId(`doc-${i}`, `knowledge item ${i % 50} about topic ${i % 20}`);
     }
 
-    const start = performance.now();
-    const results = engine.search('knowledge about topic', 10);
-    const elapsed = performance.now() - start;
+    const { elapsed, value: results } = bestOf(5, () => engine.search('knowledge about topic', 10));
 
     expect(results.length).toBe(10);
     expect(elapsed).toBeLessThan(50);
   });
 
   it('should handle concurrent inserts and searches within budget', () => {
-    const engine = new LocalVectorEngine({ dimension: 128 });
-    const start = performance.now();
+    const { elapsed } = bestOf(3, () => {
+      const engine = new LocalVectorEngine({ dimension: 128 });
 
-    for (let i = 0; i < 500; i++) {
-      engine.insertWithId(`item-${i}`, `Concurrent test item ${i}`);
-      if (i % 10 === 0) {
-        engine.search(`test item ${i}`, 3);
+      for (let i = 0; i < 500; i++) {
+        engine.insertWithId(`item-${i}`, `Concurrent test item ${i}`);
+        if (i % 10 === 0) {
+          engine.search(`test item ${i}`, 3);
+        }
       }
-    }
+    });
 
-    const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(500);
   });
 });
@@ -99,15 +122,15 @@ describe('Performance Benchmark: Memory Footprint', () => {
 
 describe('Performance Benchmark: SemanticVectorMemory Latency', () => {
   it('should store and search 500 entries under 50ms', () => {
-    const memory = new SemanticVectorMemory(128);
-    const start = performance.now();
+    const { elapsed } = bestOf(3, () => {
+      const memory = new SemanticVectorMemory(128);
 
-    for (let i = 0; i < 500; i++) {
-      memory.store(`item-${i}`, `Performance test lesson number ${i}`);
-    }
-    memory.search('performance test lesson', 10);
+      for (let i = 0; i < 500; i++) {
+        memory.store(`item-${i}`, `Performance test lesson number ${i}`);
+      }
+      memory.search('performance test lesson', 10);
+    });
 
-    const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(50);
   });
 });

@@ -10,6 +10,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege, plus the one write this workflow genuinely needs: reporting a
+# test failure back onto the pull request. See the `report-test-failure` step for
+# why a comment is used instead of an artifact or the job log.
+permissions:
+  contents: read
+  pull-requests: write
+
 env:
   PNPM_VERSION: '8.15.0'
   NODE_VERSION: '20'
@@ -84,7 +91,59 @@ jobs:
           pnpm-version: ${{ env.PNPM_VERSION }}
           node-version: ${{ env.NODE_VERSION }}
           build: 'true'
-      - run: pnpm test:all
+      # `tee` keeps the complete output on the runner so it can be published when
+      # the suite fails. `set -o pipefail` is essential here: without it the
+      # step's exit code is tee's — always 0 — and a red suite would report
+      # green. This exact masking bug was hit earlier with a lint pipe.
+      - name: Run the full workspace suite
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test:all 2>&1 | tee test-output.log
+
+      # Job logs cannot be retrieved through the API from this environment: the
+      # blob-storage redirect ends in EOF, which left three consecutive test
+      # failures undiagnosable and forced blind local reproduction. Artifacts are
+      # downloadable, so publish the output whenever the suite does not pass.
+      - name: Publish test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-output.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Retrieving that artifact is not always possible: both job logs and
+      # artifact downloads are served from Azure blob storage, and from some
+      # environments every attempt ends in EOF after the redirect. A pull request
+      # comment goes through the ordinary REST API instead, so the failure text
+      # stays reachable exactly where the logs are not. Three consecutive red runs
+      # were undiagnosable without a channel like this one.
+      - name: Report the failure on the pull request
+        if: failure() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '### `pnpm test:all` failed'
+            echo
+            echo 'Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+            echo
+            echo '```'
+            grep -aE 'FAIL |AssertionError|Error:|expected|Test Files|Tests |ELIFECYCLE|Exit status' test-output.log | tail -n 100 || true
+            echo '```'
+            echo
+            echo '<details><summary>tail of the raw output</summary>'
+            echo
+            echo '```'
+            tail -n 60 test-output.log || echo '(no output captured)'
+            echo '```'
+            echo
+            echo '</details>'
+          } > failure-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file failure-comment.md
 
   # ===========================================================================
   # 4. Lint — correctness rules are errors; known debt is warnings.

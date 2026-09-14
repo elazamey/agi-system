@@ -26,7 +26,14 @@ export type {
 export { RiskEvaluator, createRiskEvaluator } from './risk.js';
 
 // Policy Engine
-export { PolicyEngine, createPolicyEngine, FAIL_CLOSED_RULE_ID } from './policy.js';
+export {
+  PolicyEngine,
+  createPolicyEngine,
+  FAIL_CLOSED_RULE_ID,
+  matchesDangerousCommand,
+  DANGEROUS_PHRASES,
+  DANGEROUS_WORDS,
+} from './policy.js';
 
 // Governance vocabulary (canonical module/operation names + fail-closed helper)
 export {

@@ -986,6 +986,9 @@ importers:
 
   packages/os-skills:
     dependencies:
+      '@agi-os/governance':
+        specifier: workspace:*
+        version: link:../governance
       '@agi-os/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -993,6 +996,9 @@ importers:
         specifier: workspace:*
         version: link:../skills
     devDependencies:
+      '@types/node':
+        specifier: ^20.11.0
+        version: 20.19.43
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(typescript@5.9.3)

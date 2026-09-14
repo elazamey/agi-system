@@ -8,6 +8,13 @@ import type { ActionIntent, RiskAssessment, RiskFactor } from './types.js';
 import { RiskLevel } from './types.js';
 import { normalizeModule, normalizeOperation } from './vocabulary.js';
 
+/** Read a boolean flag off an `unknown` intent payload (see policy.ts). */
+function payloadFlag(intent: ActionIntent, key: string): boolean {
+  const payload = intent.payload;
+  if (typeof payload !== 'object' || payload === null) return false;
+  return (payload as Record<string, unknown>)[key] === true;
+}
+
 /** Scratch space POL-006 already treats as outside the protected filesystem. */
 const SCRATCH_ROOTS = ['/tmp/', '/var/tmp/', '/private/tmp/'];
 
@@ -64,10 +71,24 @@ export class RiskEvaluator {
       }
     }
 
-    // 3. Execute operations → HIGH
+    // 3. Execute operations.
+    //
+    // Arbitrary execution is HIGH. Execution that the caller has constrained —
+    // an allowlisted binary, a working directory inside the jail, no shell — is
+    // a different blast radius and is scored accordingly. The flat +40 used to
+    // make even `ls -la` HIGH, and the risk override then escalated POL-010's
+    // explicit ALLOW to REQUIRE_APPROVAL.
     if (intent.operation === 'execute' || intent.operation === 'run' || intent.operation === 'spawn') {
-      factors.push({ name: 'execute_operation', contribution: 40, description: `Execution operation: ${intent.operation}` });
-      score += 40;
+      const constrained = payloadFlag(intent, 'allowlisted') && payloadFlag(intent, 'jailed');
+      const contribution = constrained ? 15 : 40;
+      factors.push({
+        name: constrained ? 'constrained_execution' : 'execute_operation',
+        contribution,
+        description: constrained
+          ? `Constrained execution: allowlisted binary in a jailed cwd (${intent.operation})`
+          : `Execution operation: ${intent.operation}`,
+      });
+      score += contribution;
     }
 
     // 4. Module risk multipliers
@@ -173,19 +194,29 @@ export class RiskEvaluator {
     return multipliers[module] ?? 1.0;
   }
 
+  /**
+   * Sensitive-target detection.
+   *
+   * These patterns used to be matched with a raw `includes`, which produced
+   * false positives that changed real decisions: the command
+   * `node -e "console.log(process.env)"` contains the substring `.env`, so it
+   * scored +30, crossed into HIGH, and the risk override escalated POL-010's
+   * explicit ALLOW to REQUIRE_APPROVAL. An agent could not print its own
+   * environment because a filename pattern matched inside an identifier.
+   *
+   * Bare names are therefore matched on a boundary — the character before them
+   * must not be part of a word — while absolute paths stay substring matches,
+   * since `/etc/passwd` cannot occur inside an identifier by accident.
+   */
   private evaluateTarget(intent: ActionIntent): RiskFactor {
     const target = intent.target.toLowerCase();
 
-    // Sensitive system files
-    const sensitivePatterns = [
+    /** Absolute or directory-qualified locations: unambiguous as substrings. */
+    const absolutePatterns = [
       '/etc/passwd', '/etc/shadow', '/etc/sudoers',
-      '.env', '.env.local', '.env.production',
-      'id_rsa', 'id_ed25519', '.ssh/',
       '/boot/', '/sys/', '/proc/',
-      '..',
     ];
-
-    for (const pattern of sensitivePatterns) {
+    for (const pattern of absolutePatterns) {
       if (target.includes(pattern)) {
         return {
           name: 'sensitive_target',
@@ -193,6 +224,38 @@ export class RiskEvaluator {
           description: `Target matches sensitive pattern: ${pattern}`,
         };
       }
+    }
+
+    /**
+     * Bare secret filenames. Require a non-word character (or the start of the
+     * string) immediately before the match, so `process.env` and `myid_rsa` are
+     * not treated as the files `.env` and `id_rsa`.
+     */
+    const barePatterns = [
+      '.env', '.env.local', '.env.production',
+      'id_rsa', 'id_ed25519', '.ssh/',
+    ];
+    for (const pattern of barePatterns) {
+      const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(^|[^a-z0-9_])${escaped}`).test(target)) {
+        return {
+          name: 'sensitive_target',
+          contribution: 30,
+          description: `Target matches sensitive pattern: ${pattern}`,
+        };
+      }
+    }
+
+    // Traversal, matched as a path segment. A raw `..` substring fires on
+    // ordinary text such as version ranges (`1..2`) and ellipses in a command
+    // line, so require the `..` to be attached to a separator: `../x`, `/x/..`,
+    // or a bare `..` on its own.
+    if (/\.\.[\\/]|[\\/]\.\.|^\.\.$/.test(target)) {
+      return {
+        name: 'sensitive_target',
+        contribution: 30,
+        description: 'Target contains a path traversal segment',
+      };
     }
 
     // Root-level operations

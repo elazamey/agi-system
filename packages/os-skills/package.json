@@ -21,10 +21,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agi-os/governance": "workspace:*",
     "@agi-os/kernel": "workspace:*",
     "@agi-os/skills": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^20.11.0",
     "tsup": "^8.5.1",
     "typescript": "^5.3.0",
     "vitest": "^4.1.11"

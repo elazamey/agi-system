@@ -16,7 +16,7 @@ export const FAIL_CLOSED_RULE_ID = 'FAIL-CLOSED';
  * Multi-token dangerous phrases. Substring matching is correct for these —
  * they are specific enough not to occur by accident.
  */
-const DANGEROUS_PHRASES = [
+export const DANGEROUS_PHRASES = [
   'rm -rf', 'rm -fr', 'chmod 777', 'chown root', 'fork bomb',
   'docker run --privileged', 'mkfs', ':(){', 'eval(', 'new function',
   'shutdown', 'reboot', '> /dev/sda', 'wget', 'curl',
@@ -27,7 +27,20 @@ const DANGEROUS_PHRASES = [
  * a naive `includes('format')` blocked every command containing the word
  * "information", and `includes('dd')` blocked "added" and "address".
  */
-const DANGEROUS_WORDS = ['dd', 'format', 'crontab', 'fdisk', 'parted', 'shred'] as const;
+export const DANGEROUS_WORDS = ['dd', 'format', 'crontab', 'fdisk', 'parted', 'shred'] as const;
+
+/**
+ * Read a boolean flag off an intent payload.
+ *
+ * `ActionIntent.payload` is `unknown` by design — callers put whatever they
+ * need on it — so reading a property requires narrowing rather than a cast at
+ * every use site.
+ */
+function payloadFlag(intent: ActionIntent, key: string): boolean {
+  const payload = intent.payload;
+  if (typeof payload !== 'object' || payload === null) return false;
+  return (payload as Record<string, unknown>)[key] === true;
+}
 
 /** True when a command string contains a known destructive operation. */
 export function matchesDangerousCommand(target: unknown): boolean {
@@ -181,6 +194,26 @@ export class PolicyEngine {
       priority: 50,
       enabled: true,
       tags: ['filesystem', 'workspace'],
+    });
+
+    // POL-010: Allow execution of an allowlisted binary inside a jailed working
+    // directory. The caller must vouch for both facts in the payload, and the
+    // vouching is only credible if it enforces them first — see
+    // @agi-os/os-skills TerminalExecutor. POL-005 (priority 100) still blocks
+    // dangerous command strings before this rule is reached, and a command that
+    // is neither allowlisted nor jailed falls through to the fail-closed default.
+    this.addRule({
+      id: 'POL-010',
+      description: 'Allow allowlisted binary execution inside a jailed cwd',
+      condition: (i) =>
+        i.module === 'exec' &&
+        i.operation === 'execute' &&
+        payloadFlag(i, 'allowlisted') &&
+        payloadFlag(i, 'jailed'),
+      enforce: PolicyDecision.ALLOW,
+      priority: 60,
+      enabled: true,
+      tags: ['exec', 'terminal', 'workspace'],
     });
 
     // POL-007: Allow all reads by default
