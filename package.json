@@ -20,7 +20,8 @@
     "verify": "pnpm hygiene && pnpm build && pnpm typecheck && pnpm test && pnpm lint && node scripts/audit-gate.mjs --level high && pnpm adversarial",
     "verify:quick": "pnpm hygiene && pnpm build && pnpm typecheck && node scripts/audit-gate.mjs --level high",
     "hygiene": "node scripts/workspace-hygiene.mjs",
-    "adversarial": "node scripts/adversarial-gate.mjs"
+    "adversarial": "node scripts/adversarial-gate.mjs",
+    "deploy:cf": "node scripts/deploy-cloudflare.mjs"
   },
   "engines": {
     "node": ">=20.0.0",
