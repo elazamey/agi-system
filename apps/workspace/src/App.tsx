@@ -3,7 +3,8 @@ import { useAgentStream } from "./hooks/useAgentStream";
 import { LivePreview } from "./components/LivePreview";
 import { CodeEditor } from "./components/CodeEditor";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 export default function App() {
   const [runId, setRunId] = useState<string | null>(null);
