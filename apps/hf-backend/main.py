@@ -30,6 +30,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://agi-os.pages.dev",
         "https://*.netlify.app",
+        "https://*.railway.app",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
