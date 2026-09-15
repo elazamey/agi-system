@@ -3,7 +3,7 @@ import type { Message} from '../../types';
 import { SystemLevel } from '../../types';
 import { ChatMessage } from './ChatMessage';
 import { HoloOrb } from '../common/HoloOrb';
-import { SYSTEM_LEVELS } from '../../data/mockData';
+import { SYSTEM_LEVELS } from '../../data/mockData.ts';
 import {
   Paperclip,
   Search,
