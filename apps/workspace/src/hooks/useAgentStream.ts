@@ -12,7 +12,12 @@ export interface AgentEvent {
     | "verification"
     | "code_update"
     | "run_completed"
-    | "run_cancelled";
+    | "run_cancelled"
+    | "human_approval_required"
+    | "approval_granted"
+    | "approval_denied"
+    | "policy_decision"
+    | "evidence";
 
   run_id?: string;
   event_id?: number;
@@ -33,6 +38,9 @@ export interface AgentEvent {
   source?: string;
   bytes?: number;
   reason?: string;
+
+  risk_level?: string;
+  requires_approval?: boolean;
 }
 
 interface UseAgentStreamResult {
@@ -41,7 +49,11 @@ interface UseAgentStreamResult {
   terminalLogs: string[];
   connected: boolean;
   error: string | null;
+  awaitingApproval: boolean;
+  approvalRiskLevel: string;
+  approvalReason: string;
   sendCode: (code: string) => Promise<void>;
+  approveCode: (approved: boolean) => Promise<void>;
 }
 
 export function useAgentStream(
@@ -53,14 +65,16 @@ export function useAgentStream(
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [awaitingApproval, setAwaitingApproval] = useState(false);
+  const [approvalRiskLevel, setApprovalRiskLevel] = useState("");
+  const [approvalReason, setApprovalReason] = useState("");
 
   useEffect(() => {
     if (!runId) {
       return;
     }
 
-    const url =
-      `${apiBaseUrl}/api/agent/runs/${runId}/stream`;
+    const url = `${apiBaseUrl}/api/agent/runs/${runId}/stream`;
 
     const source = new EventSource(url);
 
@@ -73,41 +87,36 @@ export function useAgentStream(
 
     source.onerror = () => {
       setConnected(false);
-      setError("انقطع اتصال SSE");
+      setError("Connection lost");
     };
 
     function handleMessage(event: MessageEvent) {
       try {
-        const parsed = JSON.parse(
-          event.data,
-        ) as AgentEvent;
+        const parsed = JSON.parse(event.data) as AgentEvent;
 
-        setEvents((prev) => [
-          ...prev,
-          parsed,
-        ]);
+        setEvents((prev) => [...prev, parsed]);
 
-        if (
-          parsed.type === "preview_update" &&
-          parsed.html
-        ) {
+        if (parsed.type === "preview_update" && parsed.html) {
           setPreviewHtml(parsed.html);
         }
 
-        if (
-          parsed.type === "terminal_log" &&
-          parsed.log
-        ) {
-          setTerminalLogs((prev) => [
-            ...prev,
-            parsed.log!,
-          ]);
+        if (parsed.type === "terminal_log" && parsed.log) {
+          setTerminalLogs((prev) => [...prev, parsed.log!]);
+        }
+
+        if (parsed.type === "human_approval_required") {
+          setAwaitingApproval(true);
+          setApprovalRiskLevel(parsed.risk_level || "CRITICAL");
+          setApprovalReason(parsed.reason || "");
+        }
+
+        if (parsed.type === "approval_granted" || parsed.type === "approval_denied") {
+          setAwaitingApproval(false);
+          setApprovalRiskLevel("");
+          setApprovalReason("");
         }
       } catch (err) {
-        console.error(
-          "SSE parse error:",
-          err,
-        );
+        console.error("SSE parse error:", err);
       }
     }
 
@@ -120,31 +129,44 @@ export function useAgentStream(
   const sendCode = useCallback(
     async (code: string) => {
       if (!runId) {
-        throw new Error(
-          "No active agent run",
-        );
+        throw new Error("No active agent run");
       }
 
       const response = await fetch(
         `${apiBaseUrl}/api/agent/runs/${runId}/update`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            code,
-          }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
         },
       );
 
       if (!response.ok) {
-        const body =
-          await response.text();
+        const body = await response.text();
+        throw new Error(`Code update failed: ${body}`);
+      }
+    },
+    [apiBaseUrl, runId],
+  );
 
-        throw new Error(
-          `Code update failed: ${body}`,
-        );
+  const approveCode = useCallback(
+    async (approved: boolean) => {
+      if (!runId) {
+        throw new Error("No active agent run");
+      }
+
+      const response = await fetch(
+        `${apiBaseUrl}/api/agent/runs/${runId}/approve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved }),
+        },
+      );
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Approval failed: ${body}`);
       }
     },
     [apiBaseUrl, runId],
@@ -156,6 +178,10 @@ export function useAgentStream(
     terminalLogs,
     connected,
     error,
+    awaitingApproval,
+    approvalRiskLevel,
+    approvalReason,
     sendCode,
+    approveCode,
   };
 }
