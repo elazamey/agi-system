@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: agi-os-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: AGI_OS_WORKSPACE
+        value: /workspace
+    healthCheckPath: /health
+    autoDeploy: true
